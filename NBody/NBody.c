@@ -52,9 +52,10 @@ struct argument load_args(int argc, char* argv[]) {
 	struct argument args = {200,8,CPU,1,NULL,TRUE};
 
 	// Part 1: check the number of argc
-	if (argc != 4 && argc != 6 && argc != 8)
+	if (argc == 1)
+		return args;
+	else if (argc != 4 && argc != 6 && argc != 8)
 		raise_error("Eorror: Incomplete parameters.", TRUE, 1);
-
 	else{
 		// Part 2: check arguments N ,D and Mode validation
 		if (!atoi(argv[1]) || !atoi(argv[2]))
@@ -120,66 +121,160 @@ void read_file(struct argument args, struct nbody* bodies) {
 }
 
 void generate_data(struct argument args, struct nbody* bodies) {
-
-	for (unsigned int file_index = 0; file_index < args.n;) {
-		float* body_member = &bodies[file_index++];
-		for (int i = 0; i < 5;) {
-			if (i == 0 || i == 1) *(body_member + i++) = (float)rand() / 0x8000;
-			else if (i == 2 || i == 3) *(body_member + i++) = 0.0;
-			else *(body_member + i++) = 1.0 / args.n;
+	if (args.m == CPU || args.m == OPENMP) {
+		for (unsigned int file_index = 0; file_index < args.n;) {
+			float* body_member = &bodies[file_index++];
+			for (int i = 0; i < 5;) {
+				if (i == 0 || i == 1) *(body_member + i++) = (float)rand() / 0x8000;
+				else if (i == 2 || i == 3) *(body_member + i++) = 0.0;
+				else *(body_member + i++) = 1.0 / args.n;
+			}
 		}
 	}
-
+	else if (args.m == OPENMP) {
+		//omp_set_nested(1);
+		int file_index;
+		#pragma omp parallel
+		{
+			srand(omp_get_thread_num() * 1000);
+			#pragma omp for schedule(dynamic,1)
+				for (file_index = 0; file_index < args.n;file_index++) {
+					float* body_member = &bodies[file_index];
+					for (int i = 0; i < 5;) {
+						if (i == 0 || i == 1) *(body_member + i++) = (float)rand() / 0x8000;
+						else if (i == 2 || i == 3) *(body_member + i++) = 0.0;
+						else *(body_member + i++) = 1.0 / args.n;
+					}
+				}
+		}
+	}
+	printf("");
 }
 
 struct point calculate_single_body_acceleration(struct nbody* bodies,int body_index, struct argument args) {
 	const float G_const = G;
 	struct point acceleration = { 0,0 };
 	struct nbody* target_bodies = bodies + body_index;
-	for (unsigned int i = 0; i < args.n; i++) {
-		struct nbody* external_body = bodies + i;
-		if (i != body_index) {
-			float x_diff = external_body->x - target_bodies->x;
-			float y_diff = external_body->y - target_bodies->y;
-			float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
-			float temp = G_const * external_body->m / (float)pow(((double)r + (double)SOFTENING), 3.0 / 2);
-			acceleration.x += temp * x_diff;
-			acceleration.y += temp * y_diff;
+	//double tic = omp_get_wtime();
+	if (args.m == CPU || args.m == OPENMP) {
+		for (unsigned int i = 0; i < args.n; i++) {
+			struct nbody* external_body = bodies + i;
+			if (i != body_index) {
+				float x_diff = external_body->x - target_bodies->x;
+				float y_diff = external_body->y - target_bodies->y;
+				float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
+				float temp = G_const * external_body->m / (float)pow(((double)r + (double)SOFTENING), 3.0 / 2);
+				acceleration.x += temp * x_diff;
+				acceleration.y += temp * y_diff;
+			}
 		}
 	}
+	else if (args.m == OPENMP)
+	{
+		int i;
+		int thread_num = omp_get_num_threads();
+		struct point *local_acceleration = (struct point *) malloc (sizeof(struct point) * thread_num);
+		#pragma omp parallel for
+		// set local acceleration to zero
+		for (i = 0; i < thread_num; i++)
+			local_acceleration[i] = acceleration;
+		#pragma omp barrier
+		#pragma omp parallel for firstprivate(body_index) //schedule(dynamic,1)
+			for (i = 0; i < args.n; i++) {
+				struct nbody* external_body = bodies + i;
+				if (i != body_index) {
+					float x_diff = external_body->x - target_bodies->x;
+					float y_diff = external_body->y - target_bodies->y;
+					float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
+					float temp = G_const * external_body->m / (float)pow(((double)r + (double)SOFTENING), 3.0 / 2);
+					local_acceleration[omp_get_thread_num()].x += temp * x_diff;
+					local_acceleration[omp_get_thread_num()].y += temp * y_diff;
+				}
+			}
+		#pragma barrier
+		#pragma omp master
+			for (i = 0; i < thread_num; i++) {
+				acceleration.x += local_acceleration[i].x;
+				acceleration.y += local_acceleration[i].y;
+			}
+	}
+	//double t = omp_get_wtime() - tic;
 	return acceleration;
 }
 
 void compute_volocity(struct nbody* bodies, float time_step, struct argument args) {
-	for (unsigned int i = 0; i < args.n; i++) {
-		struct point acceleration = calculate_single_body_acceleration(bodies,i,args);
-		(bodies + i)->vx += acceleration.x * time_step;
-		(bodies + i)->vy += acceleration.y * time_step;
+	//double tic = omp_get_wtime();
+	if (args.m == CPU) {
+		for (unsigned int i = 0; i < args.n; i++) {
+			struct point acceleration = calculate_single_body_acceleration(bodies,i,args);
+			(bodies + i)->vx += acceleration.x * time_step;
+			(bodies + i)->vy += acceleration.y * time_step;
+		}
 	}
+	else if (args.m == OPENMP) {
+		//omp_set_nested(1);
+		int i;
+		#pragma omp parallel for schedule(dynamic,2)
+			for (i = 0; i < args.n; i++) {
+				struct point acceleration = calculate_single_body_acceleration(bodies, i, args);
+				(bodies + i)->vx += acceleration.x * time_step;
+				(bodies + i)->vy += acceleration.y * time_step;
+			}
+	}
+	//double t = omp_get_wtime() - tic;
+	//printf("");
 }
 
 void update_location(struct nbody* bodies, float time_step, struct argument args) {
-	for (unsigned int i = 0; i < args.n; i++) {
-		(bodies + i)->x += (bodies + i)->vx * time_step;
-		(bodies + i)->y += (bodies + i)->vy * time_step;
+	//double tic = omp_get_wtime();
+	if (args.m == CPU) {
+		for (unsigned int i = 0; i < args.n; i++) {
+			(bodies + i)->x += (bodies + i)->vx * time_step;
+			(bodies + i)->y += (bodies + i)->vy * time_step;
+		}
 	}
+	else if (args.m == OPENMP) {
+		int i;
+		#pragma omp parallel for schedule(dynamic,2)
+			for (i = 0; i < args.n; i++) {
+				(bodies + i)->x += (bodies + i)->vx * time_step;
+				(bodies + i)->y += (bodies + i)->vy * time_step;
+			}
+	}
+	//double t = omp_get_wtime() - tic;
+	//printf("");
 }
 
 void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args) {
 	float grid_length = 1.0 / args.d;
-	for (unsigned int i = 0; i < args.d * args.d; i++)
-		*(heat_map + i) = 0.0;
-	for (unsigned int i = 0; i < args.n; i++) {
-		struct point body_location = { (bodies+i)->x, (bodies+i)->y };
-		if (!(body_location.x < 0 || body_location.x>1 || body_location.y < 0 || body_location.y>1)) {
-			int row = (int)(body_location.x / grid_length);
-			int line = (int)(body_location.y / grid_length);
-			*(heat_map+line*args.d+row) += 1.0;
+	if (args.m == CPU) {
+		for (unsigned int i = 0; i < args.d * args.d; i++)
+			*(heat_map + i) = 0.0;
+		for (unsigned int i = 0; i < args.n; i++) {
+			struct point body_location = { (bodies+i)->x, (bodies+i)->y };
+			if (!(body_location.x < 0 || body_location.x>1 || body_location.y < 0 || body_location.y>1)) {
+				int row = (int)(body_location.x / grid_length);
+				int line = (int)(body_location.y / grid_length);
+				*(heat_map+line*args.d+row) += 1.0;
+			}
 		}
+		for (unsigned int i = 0; i < args.d * args.d; i++)
+			*(heat_map + i) = *(heat_map + i) / args.n * args.d;
 	}
-	for (unsigned int i = 0; i < args.d * args.d; i++)
-		*(heat_map + i) = *(heat_map + i) / args.n * args.d;
-	printf("");
+	else if (args.m == OPENMP) {
+		for (unsigned int i = 0; i < args.d * args.d; i++)
+			*(heat_map + i) = 0.0;
+		for (unsigned int i = 0; i < args.n; i++) {
+			struct point body_location = { (bodies + i)->x, (bodies + i)->y };
+			if (!(body_location.x < 0 || body_location.x>1 || body_location.y < 0 || body_location.y>1)) {
+				int row = (int)(body_location.x / grid_length);
+				int line = (int)(body_location.y / grid_length);
+				*(heat_map + line * args.d + row) += 1.0;
+			}
+		}
+		for (unsigned int i = 0; i < args.d * args.d; i++)
+			*(heat_map + i) = *(heat_map + i) / args.n * args.d;
+	}
 }
 
 struct argument args;
@@ -191,6 +286,9 @@ int main(int argc, char *argv[]) {
 		//argc in the count of the command arguments
 		//argv is an array (of length argc) of the arguments. The first argument is always the executable name (including path)
 	args = load_args(argc,argv);
+	if (args.m == OPENMP)
+		//omp_set_num_threads(omp_get_max_threads());
+		omp_set_num_threads(4);
 
 	//Allocate any heap memory
 	bodies = (struct nbody*) malloc(sizeof(struct nbody) * args.n);
@@ -230,6 +328,7 @@ void step(void)
 	float time_step = dt;
 	for (unsigned int i = 0; i < args.iter; i++) {
 		compute_volocity(bodies, time_step, args);
+		#pragma omp barrier
 		update_location(bodies, time_step, args);
 		if (args.visualisation == TRUE)
 			update_heat_map(heat_map, bodies, args);
