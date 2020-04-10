@@ -291,7 +291,7 @@ int main(int argc, char *argv[]) {
 	args = load_args(argc,argv);
 	if (args.m == OPENMP)
 		omp_set_num_threads(omp_get_max_threads());
-		//omp_set_num_threads(8);
+		//omp_set_num_threads(10);
 
 	//Allocate any heap memory
 	bodies = (struct nbody*) malloc(sizeof(struct nbody) * args.n);
