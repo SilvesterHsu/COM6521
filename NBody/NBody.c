@@ -153,6 +153,7 @@ void generate_data(struct argument args, struct nbody* bodies) {
 
 struct point calculate_single_body_acceleration(struct nbody* bodies,int body_index, struct argument args) {
 	const float G_const = G;
+	double SOFTENING_square = (double)SOFTENING * SOFTENING;
 	struct point acceleration = { 0,0 };
 	struct nbody* target_bodies = bodies + body_index;
 	//double tic = omp_get_wtime();
@@ -162,8 +163,10 @@ struct point calculate_single_body_acceleration(struct nbody* bodies,int body_in
 			if (i != body_index) {
 				float x_diff = external_body->x - target_bodies->x;
 				float y_diff = external_body->y - target_bodies->y;
-				float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
-				float temp = G_const * external_body->m / (float)pow(((double)r + (double)SOFTENING), 3.0 / 2);
+				//float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
+				double r = (double)x_diff * x_diff + (double)y_diff * y_diff;
+				float temp = G_const * external_body->m / (float)(sqrt((r + SOFTENING_square))*(r + SOFTENING_square));
+				//float temp = G_const * external_body->m / (float)pow(((double)r + SOFTENING_square), 3.0 / 2);
 				acceleration.x += temp * x_diff;
 				acceleration.y += temp * y_diff;
 			}
@@ -287,8 +290,8 @@ int main(int argc, char *argv[]) {
 		//argv is an array (of length argc) of the arguments. The first argument is always the executable name (including path)
 	args = load_args(argc,argv);
 	if (args.m == OPENMP)
-		//omp_set_num_threads(omp_get_max_threads());
-		omp_set_num_threads(4);
+		omp_set_num_threads(omp_get_max_threads());
+		//omp_set_num_threads(8);
 
 	//Allocate any heap memory
 	bodies = (struct nbody*) malloc(sizeof(struct nbody) * args.n);
