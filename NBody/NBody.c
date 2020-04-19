@@ -12,9 +12,6 @@
 
 #define FILE_CACHE_SIZE 255		//cache used to store one line content while reading file
 
-void print_help();
-void step(void);
-
 struct argument{
 	// Arguments to store essential parameters, such
 	// as N, D, M and I, etc.
@@ -35,10 +32,113 @@ struct point {
 	float y;
 };
 
+void print_help();
+void step(void);
+
+void raise_error(char* error_message, boolean print_msg, int exit_type);
+struct argument load_args(int argc, char* argv[]);
+void read_file(struct argument args, struct nbody* bodies);
+void generate_data(struct argument args, struct nbody* bodies);
+
+struct point calculate_single_body_acceleration(struct nbody* bodies, int body_index, struct argument args);
+void compute_volocity(struct nbody* bodies, float time_step, struct argument args);
+void update_location(struct nbody* bodies, float time_step, struct argument args);
+void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args);
+
+boolean inner_loop = FALSE;
+struct argument args;
+struct nbody* bodies;
+float* heat_map;
+
+int main(int argc, char *argv[]) {
+	//Processes the command line arguments
+		//argc in the count of the command arguments
+		//argv is an array (of length argc) of the arguments. The first argument is always the executable name (including path)
+	args = load_args(argc,argv);
+	if (args.m == OPENMP)
+		omp_set_num_threads(omp_get_max_threads());
+		//omp_set_num_threads(10);
+
+	//Allocate any heap memory
+	bodies = (struct nbody*) malloc(sizeof(struct nbody) * args.n);
+	heat_map = (float*)malloc(sizeof(float) * args.d * args.d);
+	
+	//Depending on program arguments, either read initial data from file or generate random data.
+	if (args.input_file != NULL)
+		read_file(args, bodies);
+	else
+		generate_data(args, bodies);
+
+	//Depending on program arguments, either configure and start the visualiser or perform a fixed number of simulation steps (then output the timing results).
+	//args.visualisation = TRUE;
+	if (args.visualisation == TRUE) {
+		initViewer(args.n, args.d, args.m, &step);
+		setNBodyPositions(bodies);
+		setHistogramData(heat_map);
+		startVisualisationLoop();
+	}
+	else {
+		clock_t tic = clock();
+		//Sleep(123456);
+		step();
+		clock_t toc = clock();
+		int seconds = (toc - tic) / CLOCKS_PER_SEC;
+		int milliseconds = (toc - tic - seconds * CLOCKS_PER_SEC);
+		printf("Execution time %d seconds %d milliseconds\n", seconds, milliseconds);
+	}
+
+	free(bodies);
+	free(heat_map);
+	return 0;
+}
+
+void step(void)
+{
+	/*------------------------------------------------------
+	A single step to update all bodies.
+	1. compute the volocity for all bodies.
+	2. update the location for all bodies accoreding to their
+	present speed(volocity).
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		time_step: The time refers to dt.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
+	float time_step = dt;
+	for (unsigned int i = 0; i < args.iter; i++) {
+		compute_volocity(bodies, time_step, args);
+		#pragma omp barrier
+		update_location(bodies, time_step, args);
+		if (args.visualisation == TRUE)
+			update_heat_map(heat_map, bodies, args);
+	}
+}
+
+void print_help(){
+	printf("nbody_%s N D M [-i I] [-i input_file]\n", USER_NAME);
+
+	printf("where:\n");
+	printf("\tN                Is the number of bodies to simulate.\n");
+	printf("\tD                Is the integer dimension of the activity grid. The Grid has D*D locations.\n");
+	printf("\tM                Is the operation mode, either  'CPU' or 'OPENMP'\n");
+	printf("\t[-i I]           Optionally specifies the number of simulation iterations 'I' to perform. Specifying no value will use visualisation mode. \n");
+	printf("\t[-f input_file]  Optionally specifies an input file with an initial N bodies of data. If not specified random data will be created.\n");
+}
+
 void raise_error(char* error_message,boolean print_msg,int exit_type) {
 	/*------------------------------------------------------
 	When encounters an error, the scheduled output will be
 	displayed and the program will exit.
+
+	For example,
+		`raise_error("Error:...",TRUE,1)` will first print 
+		the error message "Error:...", and then exit with 
+		exit code 1.
 
 	Args:
 		error_message: Message to output
@@ -59,6 +159,17 @@ void raise_error(char* error_message,boolean print_msg,int exit_type) {
 struct argument load_args(int argc, char* argv[]) {
 	/*------------------------------------------------------
 	Check the validity of input parameters from command line
+
+	For example,
+		with the arguments of "1024 50 OPENMP -i 1000", all
+		the arguments will be stored in an 'argument' structure.
+		In the current example, the data will looks like,
+			argc.n: 1024
+			argc.d: 50
+			argc.m: OPENMP
+			argc.iter: 1000
+			argc.input_file: NULL
+			argc.visualisation: FALSE
 
 	Args:
 		argc: The number of input parameters, and should be
@@ -227,8 +338,11 @@ struct point calculate_single_body_acceleration(struct nbody* bodies,int body_in
 	Return:
 		acceleration: An structure with only 2 members which 
 			stores the accelerate in both x and y axis.
+			For example,
+				acceleration.x: 1.024
+				acceleration.y: 2.048
 	--------------------------------------------------------*/
-	boolean inner_loop = FALSE;
+
 	const float G_const = G;
 	double SOFTENING_square = (double)SOFTENING * SOFTENING;
 	struct point acceleration = { 0,0 };
@@ -407,88 +521,4 @@ void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args
 		for (i = 0; i < args.d * args.d; i++)
 			*(heat_map + i) = *(heat_map + i) / args.n * args.d;
 	}
-}
-
-struct argument args;
-struct nbody* bodies;
-float* heat_map;
-
-int main(int argc, char *argv[]) {
-	//Processes the command line arguments
-		//argc in the count of the command arguments
-		//argv is an array (of length argc) of the arguments. The first argument is always the executable name (including path)
-	args = load_args(argc,argv);
-	if (args.m == OPENMP)
-		omp_set_num_threads(omp_get_max_threads());
-		//omp_set_num_threads(10);
-
-	//Allocate any heap memory
-	bodies = (struct nbody*) malloc(sizeof(struct nbody) * args.n);
-	heat_map = (float*)malloc(sizeof(float) * args.d * args.d);
-	
-	//Depending on program arguments, either read initial data from file or generate random data.
-	if (args.input_file != NULL)
-		read_file(args, bodies);
-	else
-		generate_data(args, bodies);
-
-	//Depending on program arguments, either configure and start the visualiser or perform a fixed number of simulation steps (then output the timing results).
-	//args.visualisation = TRUE;
-	if (args.visualisation == TRUE) {
-		initViewer(args.n, args.d, args.m, &step);
-		setNBodyPositions(bodies);
-		setHistogramData(heat_map);
-		startVisualisationLoop();
-	}
-	else {
-		clock_t tic = clock();
-		//Sleep(123456);
-		step();
-		clock_t toc = clock();
-		int seconds = (toc - tic) / CLOCKS_PER_SEC;
-		int milliseconds = (toc - tic - seconds * CLOCKS_PER_SEC);
-		printf("Execution time %d seconds %d milliseconds\n", seconds, milliseconds);
-	}
-
-	free(bodies);
-	free(heat_map);
-	return 0;
-}
-
-void step(void)
-{
-	/*------------------------------------------------------
-	A single step to update all bodies.
-	1. compute the volocity for all bodies.
-	2. update the location for all bodies accoreding to their
-	present speed(volocity).
-
-	Args:
-		args: A structure which is used to store a set of
-				parameters.
-		time_step: The time refers to dt.
-
-	Return:
-		void
-	--------------------------------------------------------*/
-
-	float time_step = dt;
-	for (unsigned int i = 0; i < args.iter; i++) {
-		compute_volocity(bodies, time_step, args);
-		#pragma omp barrier
-		update_location(bodies, time_step, args);
-		if (args.visualisation == TRUE)
-			update_heat_map(heat_map, bodies, args);
-	}
-}
-
-void print_help(){
-	printf("nbody_%s N D M [-i I] [-i input_file]\n", USER_NAME);
-
-	printf("where:\n");
-	printf("\tN                Is the number of bodies to simulate.\n");
-	printf("\tD                Is the integer dimension of the activity grid. The Grid has D*D locations.\n");
-	printf("\tM                Is the operation mode, either  'CPU' or 'OPENMP'\n");
-	printf("\t[-i I]           Optionally specifies the number of simulation iterations 'I' to perform. Specifying no value will use visualisation mode. \n");
-	printf("\t[-f input_file]  Optionally specifies an input file with an initial N bodies of data. If not specified random data will be created.\n");
 }
