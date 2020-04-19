@@ -10,13 +10,15 @@
 
 #define USER_NAME "elt18sx"		//replace with your username
 
-#define FILE_CACHE_SIZE 255
+#define FILE_CACHE_SIZE 255		//cache used to store one line content while reading file
 
 void print_help();
 void step(void);
 
-// Arguments  N, D, M and I.
 struct argument{
+	// Arguments to store essential parameters, such
+	// as N, D, M and I, etc.
+
 	unsigned int n;
 	unsigned int d;
 	enum MODE m;
@@ -26,11 +28,27 @@ struct argument{
 };
 
 struct point {
+	// An Structure to store float data in both x and y
+	// axis. Usually, it is used to store the acceleration
+
 	float x;
 	float y;
 };
 
 void raise_error(char* error_message,boolean print_msg,int exit_type) {
+	/*------------------------------------------------------
+	When encounters an error, the scheduled output will be
+	displayed and the program will exit.
+
+	Args:
+		error_message: Message to output
+		print_msg: A flag of whether to output the message
+		exit_type: Exit type, for example, 1, 2 or 3
+
+	Return:
+		void
+	------------------------------------------------------*/
+
 	printf("%s\n",error_message);
 	if (print_msg)
 		print_help();
@@ -42,8 +60,17 @@ struct argument load_args(int argc, char* argv[]) {
 	/*------------------------------------------------------
 	Check the validity of input parameters from command line
 
+	Args:
+		argc: The number of input parameters, and should be
+			always equal or larger than 1.
+		argv: An array which stores the parameters as string.
+			In addition, `argv[0]` is always the PATH of the
+			program.
+		args: A structure which is used to store a set of
+			parameters.
+
 	Return:
-		An argument struct that stores the arguments. 
+		args: An argument struct that stores the arguments.
 
 	Raises:
 		exit(1): encounter with unexpected input.
@@ -90,6 +117,29 @@ struct argument load_args(int argc, char* argv[]) {
 }
 
 void read_file(struct argument args, struct nbody* bodies) {
+	/*------------------------------------------------------
+	Read the data from file according to the arguments
+
+	Args:
+		args: A structure which is used to store a set of
+			parameters.
+		f: A pointer to read file.
+		buff: An array work as cache to store a line of content
+		file_index: The index of data line, and comments are
+			already ignored.
+		token, tokenremain, delims: char pointer used for
+			separate function.
+		body_member: A single body data.
+
+	Return:
+		void
+
+	Raises:
+		exit(1): if file doesn't exist.
+		exit(1): if the number of data in file is not equal
+			to N.
+	--------------------------------------------------------*/
+
 	FILE* f = fopen(args.input_file,"r");
 	if (f == NULL)
 		raise_error("Error: file doesn't exist.", FALSE, 1);
@@ -121,7 +171,20 @@ void read_file(struct argument args, struct nbody* bodies) {
 }
 
 void generate_data(struct argument args, struct nbody* bodies) {
-	if (args.m == CPU || args.m == OPENMP) {
+	/*------------------------------------------------------
+	Generate random data for all bodies.
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		file_index: The index of data line.
+		body_member: A single body data.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
+	if (args.m == CPU) {
 		for (unsigned int file_index = 0; file_index < args.n;) {
 			float* body_member = &bodies[file_index++];
 			for (int i = 0; i < 5;) {
@@ -132,7 +195,6 @@ void generate_data(struct argument args, struct nbody* bodies) {
 		}
 	}
 	else if (args.m == OPENMP) {
-		//omp_set_nested(1);
 		int file_index;
 		#pragma omp parallel
 		{
@@ -148,16 +210,31 @@ void generate_data(struct argument args, struct nbody* bodies) {
 				}
 		}
 	}
-	printf("");
 }
 
 struct point calculate_single_body_acceleration(struct nbody* bodies,int body_index, struct argument args) {
+	/*------------------------------------------------------
+	For a single body, calculate the total acceleration
+	generated from other bodies.
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		target_bodies: A single body data.
+		SOFTENING_square: pre-calculate the square of SOFTING
+			to accelerate the program speed.
+
+	Return:
+		acceleration: An structure with only 2 members which 
+			stores the accelerate in both x and y axis.
+	--------------------------------------------------------*/
+	boolean inner_loop = FALSE;
 	const float G_const = G;
 	double SOFTENING_square = (double)SOFTENING * SOFTENING;
 	struct point acceleration = { 0,0 };
 	struct nbody* target_bodies = bodies + body_index;
 	//double tic = omp_get_wtime();
-	if (args.m == CPU || args.m == OPENMP) {
+	if (args.m == CPU || args.m == OPENMP && !inner_loop) {
 		for (unsigned int i = 0; i < args.n; i++) {
 			struct nbody* external_body = bodies + i;
 			if (i != body_index) {
@@ -172,7 +249,8 @@ struct point calculate_single_body_acceleration(struct nbody* bodies,int body_in
 			}
 		}
 	}
-	else if (args.m == OPENMP)
+	// Code for inner loop
+	else if (args.m == OPENMP && inner_loop)
 	{
 		int i;
 		int thread_num = omp_get_num_threads();
@@ -206,6 +284,21 @@ struct point calculate_single_body_acceleration(struct nbody* bodies,int body_in
 }
 
 void compute_volocity(struct nbody* bodies, float time_step, struct argument args) {
+	/*------------------------------------------------------
+	Calculate the volocity for bodies according to their
+	accelerate.
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		time_step: The time refers to dt.
+		acceleration: An structure with only 2 members which
+			stores the accelerate in both x and y axis.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
 	//double tic = omp_get_wtime();
 	if (args.m == CPU) {
 		for (unsigned int i = 0; i < args.n; i++) {
@@ -229,6 +322,19 @@ void compute_volocity(struct nbody* bodies, float time_step, struct argument arg
 }
 
 void update_location(struct nbody* bodies, float time_step, struct argument args) {
+	/*------------------------------------------------------
+	Calculate the new location for bodies according to their
+	present location and speed.
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		time_step: The time refers to dt.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
 	//double tic = omp_get_wtime();
 	if (args.m == CPU) {
 		for (unsigned int i = 0; i < args.n; i++) {
@@ -249,10 +355,23 @@ void update_location(struct nbody* bodies, float time_step, struct argument args
 }
 
 void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args) {
+	/*------------------------------------------------------
+	Calculate the heat map based on present bodies.
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
 	float grid_length = 1.0 / args.d;
 	if (args.m == CPU) {
+		// Initial heat map
 		for (unsigned int i = 0; i < args.d * args.d; i++)
 			*(heat_map + i) = 0.0;
+		// Iterate over all data points
 		for (unsigned int i = 0; i < args.n; i++) {
 			struct point body_location = { (bodies+i)->x, (bodies+i)->y };
 			if (!(body_location.x < 0 || body_location.x>1 || body_location.y < 0 || body_location.y>1)) {
@@ -261,21 +380,31 @@ void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args
 				*(heat_map+line*args.d+row) += 1.0;
 			}
 		}
+		// Normalize heat
 		for (unsigned int i = 0; i < args.d * args.d; i++)
 			*(heat_map + i) = *(heat_map + i) / args.n * args.d;
 	}
 	else if (args.m == OPENMP) {
-		for (unsigned int i = 0; i < args.d * args.d; i++)
+		// Initial heat map
+		int i;
+		#pragma omp parallel for schedule(dynamic,2)
+		for (i = 0; i < args.d * args.d; i++)
 			*(heat_map + i) = 0.0;
-		for (unsigned int i = 0; i < args.n; i++) {
+		// Iterate over all data points
+		#pragma omp parallel for
+		for (i = 0; i < args.n; i++) {
 			struct point body_location = { (bodies + i)->x, (bodies + i)->y };
 			if (!(body_location.x < 0 || body_location.x>1 || body_location.y < 0 || body_location.y>1)) {
 				int row = (int)(body_location.x / grid_length);
 				int line = (int)(body_location.y / grid_length);
-				*(heat_map + line * args.d + row) += 1.0;
+				//#pragma omp atomic
+				#pragma omp critical
+				{*(heat_map + line * args.d + row) += 1.0;}
 			}
 		}
-		for (unsigned int i = 0; i < args.d * args.d; i++)
+		// Normalize heat
+		#pragma omp parallel for schedule(dynamic,2)
+		for (i = 0; i < args.d * args.d; i++)
 			*(heat_map + i) = *(heat_map + i) / args.n * args.d;
 	}
 }
@@ -328,6 +457,21 @@ int main(int argc, char *argv[]) {
 
 void step(void)
 {
+	/*------------------------------------------------------
+	A single step to update all bodies.
+	1. compute the volocity for all bodies.
+	2. update the location for all bodies accoreding to their
+	present speed(volocity).
+
+	Args:
+		args: A structure which is used to store a set of
+				parameters.
+		time_step: The time refers to dt.
+
+	Return:
+		void
+	--------------------------------------------------------*/
+
 	float time_step = dt;
 	for (unsigned int i = 0; i < args.iter; i++) {
 		compute_volocity(bodies, time_step, args);
@@ -337,7 +481,6 @@ void step(void)
 			update_heat_map(heat_map, bodies, args);
 	}
 }
-
 
 void print_help(){
 	printf("nbody_%s N D M [-i I] [-i input_file]\n", USER_NAME);
