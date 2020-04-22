@@ -45,7 +45,6 @@ void compute_volocity(struct nbody* bodies, float time_step, struct argument arg
 void update_location(struct nbody* bodies, float time_step, struct argument args);
 void update_heat_map(float* heat_map, struct nbody* bodies, struct argument args);
 
-boolean inner_loop = FALSE;
 struct argument args;
 struct nbody* bodies;
 float* heat_map;
@@ -347,53 +346,19 @@ struct point calculate_single_body_acceleration(struct nbody* bodies,int body_in
 	double SOFTENING_square = (double)SOFTENING * SOFTENING;
 	struct point acceleration = { 0,0 };
 	struct nbody* target_bodies = bodies + body_index;
-	//double tic = omp_get_wtime();
-	if (args.m == CPU || args.m == OPENMP && !inner_loop) {
-		for (unsigned int i = 0; i < args.n; i++) {
-			struct nbody* external_body = bodies + i;
-			if (i != body_index) {
-				float x_diff = external_body->x - target_bodies->x;
-				float y_diff = external_body->y - target_bodies->y;
-				//float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
-				double r = (double)x_diff * x_diff + (double)y_diff * y_diff;
-				float temp = G_const * external_body->m / (float)(sqrt((r + SOFTENING_square))*(r + SOFTENING_square));
-				//float temp = G_const * external_body->m / (float)pow(((double)r + SOFTENING_square), 3.0 / 2);
-				acceleration.x += temp * x_diff;
-				acceleration.y += temp * y_diff;
-			}
+	for (unsigned int i = 0; i < args.n; i++) {
+		struct nbody* external_body = bodies + i;
+		if (i != body_index) {
+			float x_diff = external_body->x - target_bodies->x;
+			float y_diff = external_body->y - target_bodies->y;
+			//float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
+			double r = (double)x_diff * x_diff + (double)y_diff * y_diff;
+			float temp = G_const * external_body->m / (float)(sqrt((r + SOFTENING_square))*(r + SOFTENING_square));
+			//float temp = G_const * external_body->m / (float)pow(((double)r + SOFTENING_square), 3.0 / 2);
+			acceleration.x += temp * x_diff;
+			acceleration.y += temp * y_diff;
 		}
 	}
-	// Code for inner loop
-	else if (args.m == OPENMP && inner_loop)
-	{
-		int i;
-		int thread_num = omp_get_num_threads();
-		struct point *local_acceleration = (struct point *) malloc (sizeof(struct point) * thread_num);
-		#pragma omp parallel for
-		// set local acceleration to zero
-		for (i = 0; i < thread_num; i++)
-			local_acceleration[i] = acceleration;
-		#pragma omp barrier
-		#pragma omp parallel for firstprivate(body_index) //schedule(dynamic,1)
-			for (i = 0; i < args.n; i++) {
-				struct nbody* external_body = bodies + i;
-				if (i != body_index) {
-					float x_diff = external_body->x - target_bodies->x;
-					float y_diff = external_body->y - target_bodies->y;
-					float r = sqrt((double)x_diff * x_diff + (double)y_diff * y_diff);
-					float temp = G_const * external_body->m / (float)pow(((double)r + (double)SOFTENING), 3.0 / 2);
-					local_acceleration[omp_get_thread_num()].x += temp * x_diff;
-					local_acceleration[omp_get_thread_num()].y += temp * y_diff;
-				}
-			}
-		#pragma barrier
-		#pragma omp master
-			for (i = 0; i < thread_num; i++) {
-				acceleration.x += local_acceleration[i].x;
-				acceleration.y += local_acceleration[i].y;
-			}
-	}
-	//double t = omp_get_wtime() - tic;
 	return acceleration;
 }
 
